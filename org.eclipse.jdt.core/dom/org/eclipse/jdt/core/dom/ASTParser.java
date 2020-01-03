@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2019 IBM Corporation and others.
+ * Copyright (c) 2004, 2020 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -27,8 +27,8 @@ import org.eclipse.core.runtime.SubMonitor;
 import org.eclipse.jdt.core.IClassFile;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IJavaElement;
-import org.eclipse.jdt.core.ITypeRoot;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.ITypeRoot;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.WorkingCopyOwner;
@@ -37,14 +37,18 @@ import org.eclipse.jdt.core.compiler.CharOperation;
 import org.eclipse.jdt.internal.compiler.ast.CompilationUnitDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.ConstructorDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.ExplicitConstructorCall;
-import org.eclipse.jdt.internal.compiler.batch.Main;
 import org.eclipse.jdt.internal.compiler.batch.FileSystem.Classpath;
+import org.eclipse.jdt.internal.compiler.batch.Main;
 import org.eclipse.jdt.internal.compiler.env.IBinaryType;
 import org.eclipse.jdt.internal.compiler.parser.RecoveryScanner;
 import org.eclipse.jdt.internal.compiler.parser.RecoveryScannerData;
 import org.eclipse.jdt.internal.compiler.parser.Scanner;
 import org.eclipse.jdt.internal.compiler.util.SuffixConstants;
-import org.eclipse.jdt.internal.core.*;
+import org.eclipse.jdt.internal.core.BasicCompilationUnit;
+import org.eclipse.jdt.internal.core.BinaryType;
+import org.eclipse.jdt.internal.core.ClassFileWorkingCopy;
+import org.eclipse.jdt.internal.core.DefaultWorkingCopyOwner;
+import org.eclipse.jdt.internal.core.PackageFragment;
 import org.eclipse.jdt.internal.core.util.CodeSnippetParsingUtil;
 import org.eclipse.jdt.internal.core.util.RecordedParsingInformation;
 import org.eclipse.jdt.internal.core.util.Util;
@@ -133,7 +137,28 @@ public class ASTParser {
 	public static ASTParser newParser(int level) {
 		return new ASTParser(level);
 	}
-
+	/**
+	 * Creates File System classpath entries for types lookup from the classpath entry file path. 
+	 * @param path classpath entry file path
+	 * @return classpath entries supporting type lookup
+	 */
+	public static List<Classpath> createClasspathEntries(String path) {
+		Main main = new Main(new PrintWriter(System.out), new PrintWriter(System.err), false/*systemExit*/, null/*options*/, null/*progress*/);
+		ArrayList<Classpath> allClasspaths = new ArrayList<>();
+		try {
+				main.processPathEntries(
+						Main.DEFAULT_SIZE_CLASSPATH,
+						allClasspaths, path, null, false, false);
+			ArrayList pendingErrors = main.pendingErrors;
+			if (pendingErrors != null && pendingErrors.size() != 0) {
+				throw new IllegalStateException("invalid environment settings"); //$NON-NLS-1$
+			}
+		} catch (IllegalArgumentException e) {
+			throw new IllegalStateException("invalid environment settings", e); //$NON-NLS-1$
+		}
+		return allClasspaths;
+	}
+	
 	/**
 	 * Level of AST API desired.
 	 */
@@ -200,12 +225,19 @@ public class ASTParser {
 	 * Classpath entries to use to resolve bindings when no java project are available.
 	 */
 	private String[] classpaths;
-
+	
 	/**
 	 * Sourcepath entries to use to resolve bindings when no java project are available.
 	 */
 	private String[] sourcepaths;
 	
+	/**
+	 * Classpath lookup environment to use to resolve types. Alternative to {@link #classpaths} and {@link #sourcepaths}
+	 * set via {@link #setEnvironment(String[], String[], String[], boolean)} method. This classpath lookup environment
+	 * can be shared between multiple instances of this class.
+	 */
+	private List<Classpath> environment;
+
 	/**
 	 * Encoding of the given sourcepaths entries.
 	 */
@@ -245,35 +277,38 @@ public class ASTParser {
 	}
 
 	private List<Classpath> getClasspath() throws IllegalStateException {
-		Main main = new Main(new PrintWriter(System.out), new PrintWriter(System.err), false/*systemExit*/, null/*options*/, null/*progress*/);
-		ArrayList<Classpath> allClasspaths = new ArrayList<Classpath>();
-		try {
-			if ((this.bits & CompilationUnitResolver.INCLUDE_RUNNING_VM_BOOTCLASSPATH) != 0) {
-				org.eclipse.jdt.internal.compiler.util.Util.collectRunningVMBootclasspath(allClasspaths);
-			}
-			if (this.sourcepaths != null) {
-				for (int i = 0, max = this.sourcepaths.length; i < max; i++) {
-					String encoding = this.sourcepathsEncodings == null ? null : this.sourcepathsEncodings[i];
-					main.processPathEntries(
-							Main.DEFAULT_SIZE_CLASSPATH,
-							allClasspaths, this.sourcepaths[i], encoding, true, false);
+		if (this.environment == null) {
+			Main main = new Main(new PrintWriter(System.out), new PrintWriter(System.err), false/*systemExit*/, null/*options*/, null/*progress*/);
+			ArrayList<Classpath> allClasspaths = new ArrayList<Classpath>();
+			try {
+				if ((this.bits & CompilationUnitResolver.INCLUDE_RUNNING_VM_BOOTCLASSPATH) != 0) {
+					org.eclipse.jdt.internal.compiler.util.Util.collectRunningVMBootclasspath(allClasspaths);
 				}
-			}
-			if (this.classpaths != null) {
-				for (int i = 0, max = this.classpaths.length; i < max; i++) {
-					main.processPathEntries(
-							Main.DEFAULT_SIZE_CLASSPATH,
-							allClasspaths, this.classpaths[i], null, false, false);
+				if (this.sourcepaths != null) {
+					for (int i = 0, max = this.sourcepaths.length; i < max; i++) {
+						String encoding = this.sourcepathsEncodings == null ? null : this.sourcepathsEncodings[i];
+						main.processPathEntries(
+								Main.DEFAULT_SIZE_CLASSPATH,
+								allClasspaths, this.sourcepaths[i], encoding, true, false);
+					}
 				}
+				if (this.classpaths != null) {
+					for (int i = 0, max = this.classpaths.length; i < max; i++) {
+						main.processPathEntries(
+								Main.DEFAULT_SIZE_CLASSPATH,
+								allClasspaths, this.classpaths[i], null, false, false);
+					}
+				}
+				ArrayList pendingErrors = main.pendingErrors;
+				if (pendingErrors != null && pendingErrors.size() != 0) {
+					throw new IllegalStateException("invalid environment settings"); //$NON-NLS-1$
+				}
+			} catch (IllegalArgumentException e) {
+				throw new IllegalStateException("invalid environment settings", e); //$NON-NLS-1$
 			}
-			ArrayList pendingErrors = main.pendingErrors;
-			if (pendingErrors != null && pendingErrors.size() != 0) {
-				throw new IllegalStateException("invalid environment settings"); //$NON-NLS-1$
-			}
-		} catch (IllegalArgumentException e) {
-			throw new IllegalStateException("invalid environment settings", e); //$NON-NLS-1$
+			return allClasspaths;
 		}
-		return allClasspaths;
+		return this.environment;
 	}
 	/**
 	 * Sets all the setting to their default values.
@@ -291,6 +326,7 @@ public class ASTParser {
 		this.classpaths = null;
 		this.sourcepaths = null;
 		this.sourcepathsEncodings = null;
+		this.environment = null;
 		Map<String, String> options = JavaCore.getOptions();
 		options.remove(JavaCore.COMPILER_TASK_TAGS); // no need to parse task tags
 		this.compilerOptions = options;
@@ -353,6 +389,14 @@ public class ASTParser {
 		if (includeRunningVMBootclasspath) {
 			this.bits |= CompilationUnitResolver.INCLUDE_RUNNING_VM_BOOTCLASSPATH;
 		}
+	}
+	
+	/**
+	 * Sets classpath lookup environment. If it' not <code>null</code> it'd override the results of {@link #setEnvironment(String[], String[], String[], boolean)}
+	 * @param classpathLookupEnvironment the classpath lookup environment
+	 */
+	public void setEnvironment(List<Classpath> classpathLookupEnvironment) {
+		this.environment = classpathLookupEnvironment;
 	}
 	/**
 	 * Sets the compiler options to be used when parsing.
@@ -995,6 +1039,7 @@ public class ASTParser {
 	 */
 	public void createASTs(String[] sourceFilePaths, String[] encodings, String[] bindingKeys,
 			FileASTRequestor requestor, IProgressMonitor monitor) {
+		List<Classpath> classpath = null;
 		try {
 			int flags = 0;
 			if ((this.bits & CompilationUnitResolver.STATEMENT_RECOVERY) != 0) {
@@ -1010,11 +1055,17 @@ public class ASTParser {
 				if ((this.bits & CompilationUnitResolver.BINDING_RECOVERY) != 0) {
 					flags |= ICompilationUnit.ENABLE_BINDINGS_RECOVERY;
 				}
-				CompilationUnitResolver.resolve(sourceFilePaths, encodings, bindingKeys, requestor, this.apiLevel, this.compilerOptions, getClasspath(), flags, monitor);
+				classpath = getClasspath();
+				CompilationUnitResolver.resolve(sourceFilePaths, encodings, bindingKeys, requestor, this.apiLevel, this.compilerOptions, classpath, flags, monitor);
 			} else {
 				CompilationUnitResolver.parse(sourceFilePaths, encodings, requestor, this.apiLevel, this.compilerOptions, flags, monitor);
 			}
 		} finally {
+			// If environment has not been passed directly via setEnvironment(List<Classpath>) bur rather as classpath
+			// and source entry paths then ensure classpath entries are reset to close any opened files.
+			if (this.environment == null && classpath != null) {
+				classpath.forEach(entry -> entry.reset());
+			}
 			// reset to defaults to allow reuse (and avoid leaking)
 			initializeDefaults();
 		}
@@ -1191,6 +1242,7 @@ public class ASTParser {
 							&& (this.project != null
 									|| this.classpaths != null
 									|| this.sourcepaths != null
+									|| this.environment != null
 									|| ((this.bits & CompilationUnitResolver.INCLUDE_RUNNING_VM_BOOTCLASSPATH) != 0))
 							&& this.compilerOptions != null;
 						sourceUnit = new BasicCompilationUnit(this.rawSource, null, this.unitName == null ? "" : this.unitName, this.project); //$NON-NLS-1$

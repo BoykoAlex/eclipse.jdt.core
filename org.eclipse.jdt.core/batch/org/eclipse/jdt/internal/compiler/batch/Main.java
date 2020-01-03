@@ -1577,7 +1577,7 @@ public void addExtraProblems(CategorizedProblem problem) {
 	}
 	this.extraProblems.add(problem);
 }
-protected void addNewEntry(ArrayList<FileSystem.Classpath> paths, String currentClasspathName,
+protected void addNewEntry(List<FileSystem.Classpath> paths, String currentClasspathName,
 		ArrayList<String> currentRuleSpecs, String customEncoding,
 		String destPath, boolean isSourceOnly,
 		boolean rejectDestinationPathOnJars) {
@@ -4898,7 +4898,7 @@ private ArrayList<String> processModulePathEntries(String arg) {
 /*
  * External API
  */
-public void processPathEntries(final int defaultSize, final ArrayList<FileSystem.Classpath> paths,
+public void processPathEntries(final int defaultSize, final List<FileSystem.Classpath> paths,
 			final String currentPath, String customEncoding, boolean isSourceOnly,
 			boolean rejectDestinationPathOnJars) {
 	String currentClasspathName = null;
