@@ -1964,26 +1964,16 @@ public class StandAloneASTParserTest extends AbstractRegressionTest {
 		File packageDir = new File(rootDir, "p");
 		packageDir.mkdir();
 		File file = new File(packageDir, "X.java");
-		Writer writer = null;
-		try {
-			writer = new BufferedWriter(new FileWriter(file));
+		try (Writer writer = new BufferedWriter(new FileWriter(file));) {
 			writer.write(contents);
-		} finally {
-			if (writer != null) {
-				try {
-					writer.close();
-				} catch(IOException e) {
-					// ignore
-				}
-			}
 		}
 
 		try {
-			final String canonicalPath = file.getCanonicalPath();
+			final String absPath = file.getAbsolutePath();
 
 			FileASTRequestor requestor = new FileASTRequestor() {
 				public void acceptAST(String sourceFilePath, CompilationUnit ast) {
-					if (canonicalPath.equals(sourceFilePath)) {
+					if (absPath.equals(sourceFilePath)) {
 						ast.accept(new ASTVisitor() {
 
 							@Override
@@ -1999,7 +1989,7 @@ public class StandAloneASTParserTest extends AbstractRegressionTest {
 
 			parser.setEnvironment(null, new String[] { rootDir.getCanonicalPath() }, null, true);
 
-			parser.createASTs(new String[] {canonicalPath}, null, new String[0], requestor, null);
+			parser.createASTs(new String[] {absPath}, null, new String[0], requestor, null);
 
 			assertNotNull("No binding", bindings[0]);
 			assertEquals("Wrong type of binding", IBinding.TYPE, bindings[0].getKind());
